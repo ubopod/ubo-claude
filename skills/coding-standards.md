@@ -1,520 +1,240 @@
 ---
 name: coding-standards
-description: Universal coding standards, best practices, and patterns for TypeScript, JavaScript, React, and Node.js development.
+description: Project-specific coding standards for ubo_app (Python 3.11): typing, immutability, asyncio/service patterns, testing, and tooling (ruff + pyright).
 ---
 
-# Coding Standards & Best Practices
+# Coding Standards (ubo_app / Python)
 
-Universal coding standards applicable across all projects.
+These standards are optimized for `ubo_app`: a Raspberry Pi Python app with an event-driven architecture, `python-redux` state management, and threaded services with dedicated event loops.
 
-## Code Quality Principles
+## Core principles
 
-### 1. Readability First
-- Code is read more than written
-- Clear variable and function names
-- Self-documenting code preferred over comments
-- Consistent formatting
+- **Readability wins**: prefer clear code over clever code.
+- **Small, composable units**: small functions, small modules, clear boundaries.
+- **Fail safely**: validate inputs at boundaries, handle errors intentionally, log without leaking secrets.
+- **Deterministic state**: state is immutable; changes happen via actions → reducers → events.
 
-### 2. KISS (Keep It Simple, Stupid)
-- Simplest solution that works
-- Avoid over-engineering
-- No premature optimization
-- Easy to understand > clever code
+---
 
-### 3. DRY (Don't Repeat Yourself)
-- Extract common logic into functions
-- Create reusable components
-- Share utilities across modules
-- Avoid copy-paste programming
+## Tooling requirements (non-negotiable)
 
-### 4. YAGNI (You Aren't Gonna Need It)
-- Don't build features before they're needed
-- Avoid speculative generality
-- Add complexity only when required
-- Start simple, refactor when needed
+- **Python**: 3.11 (>=3.11, <3.12)
+- **Linter/formatter**: `ruff` (assume strict config; comply with repo config)
+- **Type checking**: `pyright`
+- **Tests**: `pytest` + `pytest-asyncio` (auto mode)
 
-## TypeScript/JavaScript Standards
+If tools disagree, **fix the code** (don’t fight the tools).
 
-### Variable Naming
+Repo-verified notes (from `pyproject.toml`):
 
-```typescript
-// ✅ GOOD: Descriptive names
-const marketSearchQuery = 'election'
-const isUserAuthenticated = true
-const totalRevenue = 1000
+- `ruff` runs with **`select = ["ALL"]`** (strict), with project-specific ignores.
+- Quotes are enforced: **single** for strings, **double** for docstrings.
 
-// ❌ BAD: Unclear names
-const q = 'election'
-const flag = true
-const x = 1000
+---
+
+## Naming conventions
+
+- **Modules/files**: `snake_case.py`
+- **Functions/vars**: `snake_case`
+- **Classes**: `PascalCase`
+- **Constants**: `UPPER_SNAKE_CASE`
+- **Env vars**: `UBO_` prefix (e.g., `UBO_DEBUG`)
+- **Service IDs**: lowercase, hyphenated (e.g., `speech-synthesis`)
+- **Notification/icon IDs**: `ubo:` for core; `<service_name>:` for services
+
+---
+
+## Typing rules (pyright-friendly)
+
+- **Type hints required** for all public APIs and any cross-module boundary.
+- Prefer **concrete types** over `Any`.
+- Use `| None` (PEP 604) instead of `Optional[...]`.
+- Prefer `collections.abc` types (`Sequence`, `Mapping`, `Callable`, `Awaitable`) over concrete containers in APIs.
+
+Example:
+
+```python
+from collections.abc import Sequence
+
+def format_items(items: Sequence[str]) -> str:
+    return ', '.join(items)
 ```
 
-### Function Naming
+### “Unknown” input
 
-```typescript
-// ✅ GOOD: Verb-noun pattern
-async function fetchMarketData(marketId: string) { }
-function calculateSimilarity(a: number[], b: number[]) { }
-function isValidEmail(email: string): boolean { }
+Use `object` / `Unknown`-equivalent patterns and validate:
 
-// ❌ BAD: Unclear or noun-only
-async function market(id: string) { }
-function similarity(a, b) { }
-function email(e) { }
+```python
+def parse_limit(value: object) -> int:
+    if not isinstance(value, int):
+        raise TypeError('limit must be an int')
+    if value < 0:
+        raise ValueError('limit must be >= 0')
+    return value
 ```
 
-### Immutability Pattern (CRITICAL)
+---
 
-```typescript
-// ✅ ALWAYS use spread operator
-const updatedUser = {
-  ...user,
-  name: 'New Name'
-}
+## Immutability (CRITICAL)
 
-const updatedArray = [...items, newItem]
+### State must be immutable
 
-// ❌ NEVER mutate directly
-user.name = 'New Name'  // BAD
-items.push(newItem)     // BAD
+- All store/service state objects must be immutable (`@dataclass(frozen=True)` and/or `python_immutable.Immutable`).
+- Reducers must **return new state**; never mutate existing objects.
+
+```python
+from dataclasses import dataclass, replace
+from python_immutable import Immutable
+
+@dataclass(frozen=True)
+class ServiceState(Immutable):
+    is_enabled: bool = True
+    volume: int = 0
+
+def set_volume(state: ServiceState, volume: int) -> ServiceState:
+    return replace(state, volume=volume)
 ```
 
-### Error Handling
+### Collections inside state
 
-```typescript
-// ✅ GOOD: Comprehensive error handling
-async function fetchData(url: string) {
-  try {
-    const response = await fetch(url)
+- Prefer immutable-friendly choices (e.g., tuples) in state.
+- If you must use lists/dicts, ensure they’re not mutated after construction (copy/replace on update).
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
+---
 
-    return await response.json()
-  } catch (error) {
-    console.error('Fetch failed:', error)
-    throw new Error('Failed to fetch data')
-  }
-}
+## Async + service-thread rules (CRITICAL)
 
-// ❌ BAD: No error handling
-async function fetchData(url) {
-  const response = await fetch(url)
-  return response.json()
-}
+### Always use `ubo_app.utils.async_.create_task`
+
+Do **not** use `asyncio.create_task` directly in services; tasks must be created in the correct event loop.
+
+```python
+from ubo_app.utils.async_ import create_task
+
+create_task(background_worker())
 ```
 
-### Async/Await Best Practices
+Note: `create_task(...)` returns an `asyncio.Handle` (not an awaitable Task). Design workers to stop via a stop signal / shutdown, not by cancelling the handle.
 
-```typescript
-// ✅ GOOD: Parallel execution when possible
-const [users, markets, stats] = await Promise.all([
-  fetchUsers(),
-  fetchMarkets(),
-  fetchStats()
-])
+### Setup must complete
 
-// ❌ BAD: Sequential when unnecessary
-const users = await fetchUsers()
-const markets = await fetchMarkets()
-const stats = await fetchStats()
+Service `setup()` must not block forever. Spawn background work via `create_task` and return.
+
+```python
+from ubo_app.utils.async_ import create_task
+
+async def setup() -> None:
+    create_task(background_worker())
+    return
 ```
 
-### Type Safety
+### Cancellation & shutdown
 
-```typescript
-// ✅ GOOD: Proper types
-interface Market {
-  id: string
-  name: string
-  status: 'active' | 'resolved' | 'closed'
-  created_at: Date
-}
+- Background tasks must support cancellation (`asyncio.CancelledError`) and exit quickly.
+- Prefer explicit “stop” signals / events over ad-hoc globals.
+- Ensure hardware resources are released (GPIO cleanup, audio handles, camera, etc.).
 
-function getMarket(id: string): Promise<Market> {
-  // Implementation
-}
+---
 
-// ❌ BAD: Using 'any'
-function getMarket(id: any): Promise<any> {
-  // Implementation
-}
+## Service boundaries (architecture rule)
+
+- **No direct cross-service method calls** for business logic.
+- Communicate via **actions/events** through the store.
+- Keep hardware access inside the relevant service (or a shared hardware utility with strict API).
+
+---
+
+## Error handling & logging
+
+- Use **structured, actionable logs**. Include context (service id, action type, device state) but not secrets.
+- Don’t swallow exceptions silently; either:
+  - handle locally and emit an event/action, or
+  - log and re-raise if it’s unrecoverable.
+
+### Don’t leak secrets
+
+- Never log tokens, WiFi passwords, private keys, or full request payloads with secrets.
+- Redact sensitive values.
+
+---
+
+## Imports & module structure
+
+- Prefer absolute imports from `ubo_app...` (consistent and pyright-friendly).
+- Keep modules cohesive:
+  - reducers/state definitions close together,
+  - hardware drivers in the service that owns them,
+  - shared utilities in `ubo_app/utils/` with minimal dependencies.
+
+---
+
+## Reducers (python-redux)
+
+- Reducers must be **pure**:
+  - no I/O
+  - no network calls
+  - no hardware calls
+  - no time-based nondeterminism
+- Side effects happen in **service tasks** that react to actions/events.
+
+---
+
+## Style: docstrings, comments, formatting
+
+- **Strings**: single quotes
+- **Docstrings**: double quotes
+- Comment **why**, not what.
+
+```python
+def compute_backoff_ms(retry_count: int) -> int:
+    """Exponential backoff to avoid overwhelming services during outages."""
+    return min(1000 * (2**retry_count), 30_000)
 ```
 
-## React Best Practices
+---
 
-### Component Structure
+## Testing standards
 
-```typescript
-// ✅ GOOD: Functional component with types
-interface ButtonProps {
-  children: React.ReactNode
-  onClick: () => void
-  disabled?: boolean
-  variant?: 'primary' | 'secondary'
-}
+- Use **pytest** + **pytest-asyncio** for async behavior.
+- Tests must cover:
+  - happy path
+  - error path
+  - cancellation/shutdown (where relevant)
+  - boundary conditions (empty, max, invalid)
+- Prefer **behavior-focused** tests:
+  - store changes (state snapshots)
+  - emitted actions/events
+  - UI-visible outcomes (for Kivy layers)
 
-export function Button({
-  children,
-  onClick,
-  disabled = false,
-  variant = 'primary'
-}: ButtonProps) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={`btn btn-${variant}`}
-    >
-      {children}
-    </button>
-  )
-}
+Example (async):
 
-// ❌ BAD: No types, unclear structure
-export function Button(props) {
-  return <button onClick={props.onClick}>{props.children}</button>
-}
+```python
+import pytest
+
+@pytest.mark.asyncio
+async def test_example(app_context):
+    await app_context.start()
+    assert app_context.is_running
 ```
 
-### Custom Hooks
+---
 
-```typescript
-// ✅ GOOD: Reusable custom hook
-export function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value)
+## Security basics (device + embedded)
 
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedValue(value)
-    }, delay)
+- **No hardcoded secrets**: environment variables or secure device storage.
+- Validate all inputs that cross a boundary:
+  - network, RPC/gRPC, filesystem paths, QR inputs, web UI inputs.
+- Be careful with filesystem operations:
+  - avoid path traversal (never join user input directly to paths).
 
-    return () => clearTimeout(handler)
-  }, [value, delay])
+---
 
-  return debouncedValue
-}
+## Code review checklist (quick)
 
-// Usage
-const debouncedQuery = useDebounce(searchQuery, 500)
-```
+- **State**: immutable updates only; reducers pure
+- **Async**: uses `ubo_app.utils.async_.create_task`; setup returns
+- **Threads/loops**: work happens in the right service loop
+- **Types**: pyright clean; no `Any` creep
+- **Lint**: ruff clean (format + rules)
+- **Tests**: new behavior covered; error/cancel paths tested
 
-### State Management
-
-```typescript
-// ✅ GOOD: Proper state updates
-const [count, setCount] = useState(0)
-
-// Functional update for state based on previous state
-setCount(prev => prev + 1)
-
-// ❌ BAD: Direct state reference
-setCount(count + 1)  // Can be stale in async scenarios
-```
-
-### Conditional Rendering
-
-```typescript
-// ✅ GOOD: Clear conditional rendering
-{isLoading && <Spinner />}
-{error && <ErrorMessage error={error} />}
-{data && <DataDisplay data={data} />}
-
-// ❌ BAD: Ternary hell
-{isLoading ? <Spinner /> : error ? <ErrorMessage error={error} /> : data ? <DataDisplay data={data} /> : null}
-```
-
-## API Design Standards
-
-### REST API Conventions
-
-```
-GET    /api/markets              # List all markets
-GET    /api/markets/:id          # Get specific market
-POST   /api/markets              # Create new market
-PUT    /api/markets/:id          # Update market (full)
-PATCH  /api/markets/:id          # Update market (partial)
-DELETE /api/markets/:id          # Delete market
-
-# Query parameters for filtering
-GET /api/markets?status=active&limit=10&offset=0
-```
-
-### Response Format
-
-```typescript
-// ✅ GOOD: Consistent response structure
-interface ApiResponse<T> {
-  success: boolean
-  data?: T
-  error?: string
-  meta?: {
-    total: number
-    page: number
-    limit: number
-  }
-}
-
-// Success response
-return NextResponse.json({
-  success: true,
-  data: markets,
-  meta: { total: 100, page: 1, limit: 10 }
-})
-
-// Error response
-return NextResponse.json({
-  success: false,
-  error: 'Invalid request'
-}, { status: 400 })
-```
-
-### Input Validation
-
-```typescript
-import { z } from 'zod'
-
-// ✅ GOOD: Schema validation
-const CreateMarketSchema = z.object({
-  name: z.string().min(1).max(200),
-  description: z.string().min(1).max(2000),
-  endDate: z.string().datetime(),
-  categories: z.array(z.string()).min(1)
-})
-
-export async function POST(request: Request) {
-  const body = await request.json()
-
-  try {
-    const validated = CreateMarketSchema.parse(body)
-    // Proceed with validated data
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({
-        success: false,
-        error: 'Validation failed',
-        details: error.errors
-      }, { status: 400 })
-    }
-  }
-}
-```
-
-## File Organization
-
-### Project Structure
-
-```
-src/
-├── app/                    # Next.js App Router
-│   ├── api/               # API routes
-│   ├── markets/           # Market pages
-│   └── (auth)/           # Auth pages (route groups)
-├── components/            # React components
-│   ├── ui/               # Generic UI components
-│   ├── forms/            # Form components
-│   └── layouts/          # Layout components
-├── hooks/                # Custom React hooks
-├── lib/                  # Utilities and configs
-│   ├── api/             # API clients
-│   ├── utils/           # Helper functions
-│   └── constants/       # Constants
-├── types/                # TypeScript types
-└── styles/              # Global styles
-```
-
-### File Naming
-
-```
-components/Button.tsx          # PascalCase for components
-hooks/useAuth.ts              # camelCase with 'use' prefix
-lib/formatDate.ts             # camelCase for utilities
-types/market.types.ts         # camelCase with .types suffix
-```
-
-## Comments & Documentation
-
-### When to Comment
-
-```typescript
-// ✅ GOOD: Explain WHY, not WHAT
-// Use exponential backoff to avoid overwhelming the API during outages
-const delay = Math.min(1000 * Math.pow(2, retryCount), 30000)
-
-// Deliberately using mutation here for performance with large arrays
-items.push(newItem)
-
-// ❌ BAD: Stating the obvious
-// Increment counter by 1
-count++
-
-// Set name to user's name
-name = user.name
-```
-
-### JSDoc for Public APIs
-
-```typescript
-/**
- * Searches markets using semantic similarity.
- *
- * @param query - Natural language search query
- * @param limit - Maximum number of results (default: 10)
- * @returns Array of markets sorted by similarity score
- * @throws {Error} If OpenAI API fails or Redis unavailable
- *
- * @example
- * ```typescript
- * const results = await searchMarkets('election', 5)
- * console.log(results[0].name) // "Trump vs Biden"
- * ```
- */
-export async function searchMarkets(
-  query: string,
-  limit: number = 10
-): Promise<Market[]> {
-  // Implementation
-}
-```
-
-## Performance Best Practices
-
-### Memoization
-
-```typescript
-import { useMemo, useCallback } from 'react'
-
-// ✅ GOOD: Memoize expensive computations
-const sortedMarkets = useMemo(() => {
-  return markets.sort((a, b) => b.volume - a.volume)
-}, [markets])
-
-// ✅ GOOD: Memoize callbacks
-const handleSearch = useCallback((query: string) => {
-  setSearchQuery(query)
-}, [])
-```
-
-### Lazy Loading
-
-```typescript
-import { lazy, Suspense } from 'react'
-
-// ✅ GOOD: Lazy load heavy components
-const HeavyChart = lazy(() => import('./HeavyChart'))
-
-export function Dashboard() {
-  return (
-    <Suspense fallback={<Spinner />}>
-      <HeavyChart />
-    </Suspense>
-  )
-}
-```
-
-### Database Queries
-
-```typescript
-// ✅ GOOD: Select only needed columns
-const { data } = await supabase
-  .from('markets')
-  .select('id, name, status')
-  .limit(10)
-
-// ❌ BAD: Select everything
-const { data } = await supabase
-  .from('markets')
-  .select('*')
-```
-
-## Testing Standards
-
-### Test Structure (AAA Pattern)
-
-```typescript
-test('calculates similarity correctly', () => {
-  // Arrange
-  const vector1 = [1, 0, 0]
-  const vector2 = [0, 1, 0]
-
-  // Act
-  const similarity = calculateCosineSimilarity(vector1, vector2)
-
-  // Assert
-  expect(similarity).toBe(0)
-})
-```
-
-### Test Naming
-
-```typescript
-// ✅ GOOD: Descriptive test names
-test('returns empty array when no markets match query', () => { })
-test('throws error when OpenAI API key is missing', () => { })
-test('falls back to substring search when Redis unavailable', () => { })
-
-// ❌ BAD: Vague test names
-test('works', () => { })
-test('test search', () => { })
-```
-
-## Code Smell Detection
-
-Watch for these anti-patterns:
-
-### 1. Long Functions
-```typescript
-// ❌ BAD: Function > 50 lines
-function processMarketData() {
-  // 100 lines of code
-}
-
-// ✅ GOOD: Split into smaller functions
-function processMarketData() {
-  const validated = validateData()
-  const transformed = transformData(validated)
-  return saveData(transformed)
-}
-```
-
-### 2. Deep Nesting
-```typescript
-// ❌ BAD: 5+ levels of nesting
-if (user) {
-  if (user.isAdmin) {
-    if (market) {
-      if (market.isActive) {
-        if (hasPermission) {
-          // Do something
-        }
-      }
-    }
-  }
-}
-
-// ✅ GOOD: Early returns
-if (!user) return
-if (!user.isAdmin) return
-if (!market) return
-if (!market.isActive) return
-if (!hasPermission) return
-
-// Do something
-```
-
-### 3. Magic Numbers
-```typescript
-// ❌ BAD: Unexplained numbers
-if (retryCount > 3) { }
-setTimeout(callback, 500)
-
-// ✅ GOOD: Named constants
-const MAX_RETRIES = 3
-const DEBOUNCE_DELAY_MS = 500
-
-if (retryCount > MAX_RETRIES) { }
-setTimeout(callback, DEBOUNCE_DELAY_MS)
-```
-
-**Remember**: Code quality is not negotiable. Clear, maintainable code enables rapid development and confident refactoring.
