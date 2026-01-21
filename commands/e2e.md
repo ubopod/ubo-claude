@@ -1,233 +1,248 @@
 ---
-description: Generate and run end-to-end tests with Playwright. Creates test journeys, runs tests, captures screenshots/videos/traces, and uploads artifacts.
+description: Generate and run end-to-end tests with pytest. Creates test flows, runs tests, captures window snapshots, and validates UI state.
 ---
 
 # E2E Command
 
-This command invokes the **e2e-runner** agent to generate, maintain, and execute end-to-end tests using Playwright.
+This command invokes the **e2e-runner** agent to generate, maintain, and execute end-to-end tests for ubo_app using pytest and window snapshots.
 
 ## What This Command Does
 
-1. **Generate Test Journeys** - Create Playwright tests for user flows
-2. **Run E2E Tests** - Execute tests across browsers
-3. **Capture Artifacts** - Screenshots, videos, traces on failures
-4. **Upload Results** - HTML reports and JUnit XML
-5. **Identify Flaky Tests** - Quarantine unstable tests
+1. **Generate Test Flows** - Create pytest tests for user flows
+2. **Run E2E Tests** - Execute tests in Docker environment
+3. **Capture Snapshots** - Window snapshots for UI validation
+4. **Compare Results** - Verify UI renders correctly against baselines
+5. **Identify Flaky Tests** - Detect timing-dependent failures
 
 ## When to Use
 
 Use `/e2e` when:
-- Testing critical user journeys (login, trading, payments)
+- Testing critical user journeys (menu navigation, settings, service interactions)
 - Verifying multi-step flows work end-to-end
-- Testing UI interactions and navigation
-- Validating integration between frontend and backend
-- Preparing for production deployment
+- Testing UI interactions with hardware services
+- Validating Redux state changes reflect in UI
+- Preparing for release deployment
 
 ## How It Works
 
 The e2e-runner agent will:
 
 1. **Analyze user flow** and identify test scenarios
-2. **Generate Playwright test** using Page Object Model pattern
-3. **Run tests** across multiple browsers (Chrome, Firefox, Safari)
-4. **Capture failures** with screenshots, videos, and traces
-5. **Generate report** with results and artifacts
+2. **Generate pytest test** using ubo_app's testing patterns
+3. **Run tests in Docker** (avoids DPI mismatch issues)
+4. **Capture window snapshots** for UI verification
+5. **Generate report** with results and snapshot diffs
 6. **Identify flaky tests** and recommend fixes
 
 ## Example Usage
 
 ```
-User: /e2e Test the market search and view flow
+User: /e2e Test the WiFi connection flow
 
 Agent (e2e-runner):
-# E2E Test Generation: Market Search and View Flow
+# E2E Test Generation: WiFi Connection Flow
 
 ## Test Scenario Identified
 
-**User Journey:** Market Search → View Results → Click Market → View Details
+**User Journey:** Main Menu → Settings → WiFi → Select Network → Enter Password → Connect
 
 **Test Coverage:**
-1. Navigate to markets page
-2. Perform semantic search
-3. Verify search results
-4. Click on first result
-5. Verify market details page loads
-6. Verify chart renders
+1. Navigate to WiFi settings menu
+2. Verify available networks list
+3. Select a network
+4. Enter password via input
+5. Verify connection status
+6. Verify state updates in Redux store
 
 ## Generated Test Code
 
-```typescript
-// tests/e2e/markets/search-and-view.spec.ts
-import { test, expect } from '@playwright/test'
-import { MarketsPage } from '../../pages/MarketsPage'
-import { MarketDetailsPage } from '../../pages/MarketDetailsPage'
+The following illustrates how a flow test is structured (based on actual `tests/flows/test_wifi.py`):
 
-test.describe('Market Search and View Flow', () => {
-  test('user can search markets and view details', async ({ page }) => {
-    // 1. Navigate to markets page
-    const marketsPage = new MarketsPage(page)
-    await marketsPage.goto()
+```python
+# tests/flows/test_wifi.py (simplified example)
+"""Test the wireless flow."""
 
-    // Verify page loaded
-    await expect(page).toHaveTitle(/Markets/)
-    await expect(page.locator('h1')).toContainText('Markets')
+from __future__ import annotations
 
-    // 2. Perform semantic search
-    await marketsPage.searchMarkets('election')
+from typing import TYPE_CHECKING
 
-    // Wait for API response
-    await page.waitForResponse(resp =>
-      resp.url().includes('/api/markets/search') && resp.status() === 200
+import pytest
+
+from ubo_app.utils import IS_RPI
+
+if TYPE_CHECKING:
+    from headless_kivy_pytest.fixtures import WindowSnapshot
+    from redux_pytest.fixtures import StoreSnapshot, WaitFor
+
+    from tests.fixtures import AppContext, LoadServices, MockCamera, Stability
+    from tests.fixtures.menu import WaitForMenuItem, WaitForEmptyMenu
+    from ubo_app.store.main import RootState
+    from ubo_app.store.services.wifi import WiFiState
+
+
+@pytest.mark.timeout(200)
+@pytest.mark.skipif(not IS_RPI, reason='Only runs on Raspberry Pi')
+async def test_setup_flow(
+    app_context: AppContext,
+    window_snapshot: WindowSnapshot,
+    store_snapshot: StoreSnapshot[RootState],
+    load_services: LoadServices,
+    stability: Stability,
+    wait_for: WaitFor,
+    camera: MockCamera,
+    wait_for_menu_item: WaitForMenuItem,
+    wait_for_empty_menu: WaitForEmptyMenu,
+) -> None:
+    """Test the wireless flow."""
+    from ubo_app.store.core.types import (
+        MenuChooseByIconAction,
+        MenuChooseByLabelAction,
+        MenuGoBackAction,
+    )
+    from ubo_app.store.main import store
+
+    def store_snapshot_selector(state: RootState) -> WiFiState:
+        return state.wifi
+
+    app_context.set_app()
+    unload_waiter = await load_services(
+        ['camera', 'display', 'notifications', 'wifi'],
+        run_async=True,
     )
 
-    // 3. Verify search results
-    const marketCards = marketsPage.marketCards
-    await expect(marketCards.first()).toBeVisible()
-    const resultCount = await marketCards.count()
-    expect(resultCount).toBeGreaterThan(0)
+    await stability()
+    store_snapshot.take(selector=store_snapshot_selector)
 
-    // Take screenshot of search results
-    await page.screenshot({ path: 'artifacts/search-results.png' })
+    # Navigate: Main menu -> Settings -> Network -> WiFi
+    store.dispatch(MenuChooseByIconAction(icon='󰍜'))
+    await stability()
 
-    // 4. Click on first result
-    const firstMarketTitle = await marketCards.first().textContent()
-    await marketCards.first().click()
+    store.dispatch(MenuChooseByLabelAction(label='Settings'))
+    await stability()
 
-    // 5. Verify market details page loads
-    await expect(page).toHaveURL(/\/markets\/[a-z0-9-]+/)
+    store.dispatch(MenuChooseByLabelAction(label='Network'))
+    await stability()
 
-    const detailsPage = new MarketDetailsPage(page)
-    await expect(detailsPage.marketName).toBeVisible()
-    await expect(detailsPage.marketDescription).toBeVisible()
+    store.dispatch(MenuChooseByLabelAction(label='WiFi'))
+    await stability()
+    window_snapshot.take()
 
-    // 6. Verify chart renders
-    await expect(detailsPage.priceChart).toBeVisible()
+    # Select "Add" to add a new connection
+    store.dispatch(MenuChooseByLabelAction(label='Add'))
+    await stability()
+    window_snapshot.take()
 
-    // Verify market name matches
-    const detailsTitle = await detailsPage.marketName.textContent()
-    expect(detailsTitle?.toLowerCase()).toContain(
-      firstMarketTitle?.toLowerCase().substring(0, 20) || ''
-    )
+    # Set QR Code image before camera is started
+    camera.set_image('qrcode/wifi')
 
-    // Take screenshot of market details
-    await page.screenshot({ path: 'artifacts/market-details.png' })
-  })
+    # Select "QR code" input method
+    store.dispatch(MenuChooseByIconAction(icon='󰄀'))
+    await stability()
+    window_snapshot.take()
 
-  test('search with no results shows empty state', async ({ page }) => {
-    const marketsPage = new MarketsPage(page)
-    await marketsPage.goto()
+    # Scan QR code
+    store.dispatch(MenuChooseByIconAction(icon='󰄀'))
+    window_snapshot.take()
 
-    // Search for non-existent market
-    await marketsPage.searchMarkets('xyznonexistentmarket123456')
+    # Wait for connection and verify
+    await wait_for_menu_item(label='ubo-test-ssid', icon='󱚽')
+    store_snapshot.take(selector=store_snapshot_selector)
+    window_snapshot.take()
 
-    // Verify empty state
-    await expect(page.locator('[data-testid="no-results"]')).toBeVisible()
-    await expect(page.locator('[data-testid="no-results"]')).toContainText(
-      /no.*results|no.*markets/i
-    )
-
-    const marketCount = await marketsPage.marketCards.count()
-    expect(marketCount).toBe(0)
-  })
-
-  test('can clear search and see all markets again', async ({ page }) => {
-    const marketsPage = new MarketsPage(page)
-    await marketsPage.goto()
-
-    // Initial market count
-    const initialCount = await marketsPage.marketCards.count()
-
-    // Perform search
-    await marketsPage.searchMarkets('trump')
-    await page.waitForLoadState('networkidle')
-
-    // Verify filtered results
-    const filteredCount = await marketsPage.marketCards.count()
-    expect(filteredCount).toBeLessThan(initialCount)
-
-    // Clear search
-    await marketsPage.searchInput.clear()
-    await page.waitForLoadState('networkidle')
-
-    // Verify all markets shown again
-    const finalCount = await marketsPage.marketCards.count()
-    expect(finalCount).toBe(initialCount)
-  })
-})
+    await unload_waiter()
 ```
 
 ## Running Tests
 
 ```bash
-# Run the generated test
-npx playwright test tests/e2e/markets/search-and-view.spec.ts
+# Build Docker test image first
+uv run poe build-docker-images
 
-Running 3 tests using 3 workers
+# Run flow tests in Docker (recommended)
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test -- -svv tests/flows/test_wifi.py
 
-  ✓  [chromium] › search-and-view.spec.ts:5:3 › user can search markets and view details (4.2s)
-  ✓  [chromium] › search-and-view.spec.ts:52:3 › search with no results shows empty state (1.8s)
-  ✓  [chromium] › search-and-view.spec.ts:67:3 › can clear search and see all markets again (2.9s)
+# Run integration tests
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test -- -svv tests/integration/test_core.py
+```
 
-  3 passed (9.1s)
+Example output:
+```
+tests/flows/test_wifi.py::test_setup_flow PASSED
 
-Artifacts generated:
-- artifacts/search-results.png
-- artifacts/market-details.png
-- playwright-report/index.html
+  1 passed in 45.2s
+
+Snapshots captured in tests/flows/results/
 ```
 
 ## Test Report
 
 ```
-╔══════════════════════════════════════════════════════════════╗
-║                    E2E Test Results                          ║
-╠══════════════════════════════════════════════════════════════╣
-║ Status:     ✅ ALL TESTS PASSED                              ║
-║ Total:      3 tests                                          ║
-║ Passed:     3 (100%)                                         ║
-║ Failed:     0                                                ║
-║ Flaky:      0                                                ║
-║ Duration:   9.1s                                             ║
-╚══════════════════════════════════════════════════════════════╝
++--------------------------------------------------------------+
+|                    E2E Test Results                          |
++--------------------------------------------------------------+
+| Status:     PASSED                                           |
+| Total:      3 tests                                          |
+| Passed:     3 (100%)                                         |
+| Failed:     0                                                |
+| Duration:   4.2s                                             |
++--------------------------------------------------------------+
 
-Artifacts:
-📸 Screenshots: 2 files
-📹 Videos: 0 files (only on failure)
-🔍 Traces: 0 files (only on failure)
-📊 HTML Report: playwright-report/index.html
+Snapshots:
+  New:      0
+  Updated:  0
+  Matched:  4
+  Failed:   0
 
-View report: npx playwright show-report
+Update snapshots in Docker:
+  docker run ... -- --override-window-snapshots --override-store-snapshots
 ```
 
-✅ E2E test suite ready for CI/CD integration!
+E2E test suite ready for CI integration!
 ```
 
 ## Test Artifacts
 
 When tests run, the following artifacts are captured:
 
+**Snapshot Location:** `tests/<category>/results/<test_file>/<test_name>/`
+
+Example: `tests/flows/results/test_wifi/setup_flow/`
+
 **On All Tests:**
-- HTML Report with timeline and results
-- JUnit XML for CI integration
+- Window snapshots: `window-000.png`, `window-001.png`, etc.
+- Store snapshots: `store-000.json`, `store-001.json`, etc.
 
 **On Failure Only:**
-- Screenshot of the failing state
-- Video recording of the test
-- Trace file for debugging (step-by-step replay)
-- Network logs
-- Console logs
+- Snapshot diff images (expected vs actual)
+- Redux state dump at failure point
 
 ## Viewing Artifacts
 
+Snapshots are stored in `tests/<category>/results/<test_file>/<test_name>/`.
+
 ```bash
-# View HTML report in browser
-npx playwright show-report
+# View window snapshots
+ls tests/flows/results/test_wifi/setup_flow/
+open tests/flows/results/test_wifi/setup_flow/window-000.png
 
-# View specific trace file
-npx playwright show-trace artifacts/trace-abc123.zip
+# Update snapshots (must run in Docker for consistency)
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test -- --override-window-snapshots --override-store-snapshots \
+  tests/flows/test_wifi.py
 
-# Screenshots are saved in artifacts/ directory
-open artifacts/search-results.png
+# Generate new screenshots
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test -- --make-screenshots tests/flows/
 ```
 
 ## Flaky Test Detection
@@ -235,103 +250,150 @@ open artifacts/search-results.png
 If a test fails intermittently:
 
 ```
-⚠️  FLAKY TEST DETECTED: tests/e2e/markets/trade.spec.ts
+  FLAKY TEST DETECTED: tests/flows/test_wifi_connection.py::test_user_can_connect
 
 Test passed 7/10 runs (70% pass rate)
 
 Common failure:
-"Timeout waiting for element '[data-testid="confirm-btn"]'"
+"AssertionError: Snapshot mismatch - animation frame captured"
 
 Recommended fixes:
-1. Add explicit wait: await page.waitForSelector('[data-testid="confirm-btn"]')
-2. Increase timeout: { timeout: 10000 }
-3. Check for race conditions in component
-4. Verify element is not hidden by animation
+1. Add explicit wait: await app_context.wait_for_animation_complete()
+2. Increase state wait timeout: wait_for_state(..., timeout=5.0)
+3. Mock time-dependent animations
+4. Check for race conditions in async handlers
 
-Quarantine recommendation: Mark as test.fixme() until fixed
+Quarantine: Mark as @pytest.mark.skip(reason='flaky') until fixed
 ```
 
-## Browser Configuration
+## Docker Testing Environment
 
-Tests run on multiple browsers by default:
-- ✅ Chromium (Desktop Chrome)
-- ✅ Firefox (Desktop)
-- ✅ WebKit (Desktop Safari)
-- ✅ Mobile Chrome (optional)
+Tests MUST run in Docker to ensure consistent snapshots:
 
-Configure in `playwright.config.ts` to adjust browsers.
+```bash
+# Build test image
+uv run poe build-docker-images
 
-## CI/CD Integration
+# Run all E2E tests (basic)
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test
 
-Add to your CI pipeline:
+# Run specific tests with full volume mounts (recommended)
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  -v ubo-app-dev-uv-local:/root/.local/share/uv \
+  -v ubo-app-dev-uv-venv:/ubo-app/.venv \
+  ubo-app-test -- -svv tests/flows/
 
-```yaml
-# .github/workflows/e2e.yml
-- name: Install Playwright
-  run: npx playwright install --with-deps
+# Run with snapshot override flags
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test -- -svv --make-screenshots --override-store-snapshots --override-window-snapshots
 
-- name: Run E2E tests
-  run: npx playwright test
-
-- name: Upload artifacts
-  if: always()
-  uses: actions/upload-artifact@v3
-  with:
-    name: playwright-report
-    path: playwright-report/
+# Interactive debugging
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test bash
+# Then inside container: pytest tests/flows/test_wifi.py -v --pdb
 ```
 
-## PMX-Specific Critical Flows
+**Why Docker?**
+- Avoids DPI mismatch issues on macOS (known issue with different DPI settings)
+- Consistent snapshot baselines across machines
+- Matches CI environment
+- Proper headless Kivy rendering
 
-For PMX, prioritize these E2E tests:
+## Running Tests on Device
 
-**🔴 CRITICAL (Must Always Pass):**
-1. User can connect wallet
-2. User can browse markets
-3. User can search markets (semantic search)
-4. User can view market details
-5. User can place trade (with test funds)
-6. Market resolves correctly
-7. User can withdraw funds
+For testing on a physical Raspberry Pi device:
 
-**🟡 IMPORTANT:**
-1. Market creation flow
-2. User profile updates
-3. Real-time price updates
-4. Chart rendering
-5. Filter and sort markets
-6. Mobile responsive layout
+```bash
+# One-time setup: copy test files and install dependencies
+uv run poe device:test:copy
+uv run poe device:test:deps
+
+# Run tests on device
+uv run poe device:test
+```
+
+**Note:** Requires SSH config for `ubo-development-pod` host. See README for setup instructions.
+
+## Simulating Hardware Input
+
+For testing flows that require hardware input:
+
+```python
+# QR Code input - write to file
+@pytest.fixture
+def qr_code_input(tmp_path):
+    """Simulate QR code scan."""
+    qr_file = Path('/tmp/qrcode_input.txt')
+    qr_file.write_text('wifi:S:MyNetwork;T:WPA;P:password123;;')
+    yield
+    qr_file.unlink(missing_ok=True)
+
+# Or use PNG for image-based QR
+qr_image = Path('/tmp/qrcode_input.png')
+```
+
+## Ubo App Critical Flows
+
+For ubo_app, prioritize these E2E tests:
+
+**CRITICAL (Must Always Pass):**
+1. Boot sequence completes
+2. Main menu navigation works
+3. WiFi connection flow (but only if running on ubo pod device, otherwise this will be skipped)
+4. Settings modification persists
+5. Service start/stop works
+6. Docker container management
+7. System update flow
+
+**IMPORTANT:**
+1. SSH enable/disable
+2. Display brightness adjustment
+3. Audio volume control
+4. Camera capture
+5. Sensor readings display
+6. Web UI accessibility
 
 ## Best Practices
 
 **DO:**
-- ✅ Use Page Object Model for maintainability
-- ✅ Use data-testid attributes for selectors
-- ✅ Wait for API responses, not arbitrary timeouts
-- ✅ Test critical user journeys end-to-end
-- ✅ Run tests before merging to main
-- ✅ Review artifacts when tests fail
+- Run tests in Docker for consistent snapshots
+- Use `create_task` from `ubo_app.utils.async_` in test fixtures
+- Wait for Redux state changes, not arbitrary timeouts
+- Test critical user journeys end-to-end
+- Mock hardware at the abstraction layer
+- Use `wait_for_state()` for async assertions
 
 **DON'T:**
-- ❌ Use brittle selectors (CSS classes can change)
-- ❌ Test implementation details
-- ❌ Run tests against production
-- ❌ Ignore flaky tests
-- ❌ Skip artifact review on failures
-- ❌ Test every edge case with E2E (use unit tests)
+- Run snapshot tests outside Docker (DPI mismatch)
+- Use `time.sleep()` for waiting
+- Test implementation details
+- Skip snapshot review on failures
+- Ignore flaky tests
+- Run tests that modify real hardware state
 
 ## Important Notes
 
-**CRITICAL for PMX:**
-- E2E tests involving real money MUST run on testnet/staging only
-- Never run trading tests against production
-- Set `test.skip(process.env.NODE_ENV === 'production')` for financial tests
-- Use test wallets with small test funds only
+**CRITICAL for ubo_app:**
+- Always run in Docker for consistent snapshots (macOS has different DPI settings that cause mismatches)
+- Mock hardware services, never test against real GPIO
+- Use `/tmp/qrcode_input.txt` or `/tmp/qrcode_input.png` for QR code simulation
+- Tests should clean up any state changes
+- Service threads must be properly stopped after tests
+- Type checking is best run on the actual device or with stubs from [ubo-non-rpi-stubs](https://github.com/ubopod/ubo-non-rpi-stubs)
 
 ## Integration with Other Commands
 
-- Use `/plan` to identify critical journeys to test
-- Use `/tdd` for unit tests (faster, more granular)
+- Use `/plan` to identify critical flows to test
+- Use `/tdd` for unit tests of reducers and actions
 - Use `/e2e` for integration and user journey tests
 - Use `/code-review` to verify test quality
 
@@ -343,21 +405,45 @@ This command invokes the `e2e-runner` agent located at:
 ## Quick Commands
 
 ```bash
-# Run all E2E tests
-npx playwright test
+# Build Docker test images (required first)
+uv run poe build-docker-images
 
-# Run specific test file
-npx playwright test tests/e2e/markets/search.spec.ts
+# Run all tests in Docker
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test
 
-# Run in headed mode (see browser)
-npx playwright test --headed
+# Run specific test file (real examples)
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test -- tests/flows/test_wifi.py -svv
 
-# Debug test
-npx playwright test --debug
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test -- tests/integration/test_core.py -svv
 
-# Generate test code
-npx playwright codegen http://localhost:3000
+# Update/override snapshots
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test -- --override-window-snapshots --override-store-snapshots
 
-# View report
-npx playwright show-report
+# Generate new screenshots
+docker run --rm -it --name ubo-app-test \
+  -v .:/ubo-app \
+  -v ubo-app-dev-uv-cache:/root/.cache/uv \
+  ubo-app-test -- --make-screenshots
+
+# Run on device (one-time setup)
+uv run poe device:test:copy
+uv run poe device:test:deps
+
+# Run tests on device
+uv run poe device:test
+
+# Local run (snapshots may not match on macOS due to DPI)
+uv run poe test
 ```
