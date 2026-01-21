@@ -137,6 +137,163 @@ Pattern:
 
 ---
 
+## Autoruns (reactive subscriptions)
+
+Autoruns are reactive subscriptions that run a callback whenever **selected state** changes. They are the primary mechanism for services and UI to react to state transitions.
+
+### Basic usage
+
+```python
+from ubo_app.store.main import store
+
+@store.autorun(lambda state: state.wifi.connections)
+def on_wifi_connections_change(connections: tuple[WifiConnection, ...]) -> None:
+    """Called whenever wifi connections change."""
+    logger.info('WiFi connections updated', extra={'count': len(connections)})
+```
+
+The decorator:
+1. Extracts `state.wifi.connections` via the selector
+2. Compares against previous value (by default using equality)
+3. Calls the function **only when value changes**
+
+### Selector patterns
+
+**Simple selector** — single state field:
+
+```python
+@store.autorun(lambda state: state.audio.playback_volume)
+def set_volume(volume: float) -> None:
+    audio_manager.set_playback_volume(volume)
+```
+
+**Composite selector** — multiple fields as tuple:
+
+```python
+@store.autorun(lambda state: (state.update_manager, state.settings.beta_versions))
+def check_updates(data: tuple[UpdateManagerState, bool]) -> None:
+    manager_state, beta_enabled = data
+    # React to either field changing
+```
+
+**Nested selector** — drilling into structures:
+
+```python
+@store.autorun(
+    lambda state: (
+        state.assistant.mcp_servers.get(server_id),
+        server_id in state.assistant.enabled_mcp_servers,
+    ),
+)
+def menu(state_data: tuple[McpServerMetadata | None, bool]) -> HeadedMenu:
+    server, is_enabled = state_data
+    ...
+```
+
+### Options
+
+Use `AutorunOptions` for advanced control:
+
+```python
+from redux import AutorunOptions
+
+@store.autorun(
+    lambda state: external_file_mtime(),  # selector not purely from state
+    options=AutorunOptions(memoization=False),  # always re-run even if value same
+)
+def on_file_change(mtime: float) -> dict[str, str]:
+    return load_secrets_from_disk()
+```
+
+Common options:
+- `memoization=False`: skip equality check, always call on store update (useful when selector depends on external values)
+- `default_value=<val>`: value to use if selector returns `None` or raises
+- `keep_ref=True/False`: whether to prevent garbage collection of the autorun (default `True`)
+
+### Returning values from autoruns
+
+Autoruns can **return computed values** that become reactive properties:
+
+```python
+@store.autorun(lambda state: state.settings.pdb_signal)
+def pdb_debug_icon(pdb_signal: bool) -> str:
+    return '󰱒' if pdb_signal else '󰄱'
+
+# Later, use as a reactive value:
+menu_item = UboDispatchItem(
+    label='PDB Signal',
+    icon=pdb_debug_icon,  # updates automatically when state changes
+)
+```
+
+### Async autoruns
+
+Autorun callbacks can be async:
+
+```python
+@store.autorun(lambda state: state.rpi_connect)
+async def on_rpi_connect_change(state: RPiConnectState) -> None:
+    await some_async_operation(state)
+```
+
+The store schedules these on the service's coroutine runner.
+
+### Keeping autoruns alive
+
+**Important**: autoruns are garbage-collected if no reference is kept. Always assign to a variable or store in a returned subscription list:
+
+```python
+def init_service() -> Subscriptions:
+    @store.autorun(lambda state: state.audio.playback_volume)
+    def set_volume(volume: float) -> None:
+        audio_manager.set_volume(volume)
+
+    # Keep reference alive for service lifetime
+    _ = set_volume
+
+    return [audio_manager.close]
+```
+
+Or collect them:
+
+```python
+def init_service() -> Subscriptions:
+    autoruns = []
+
+    @store.autorun(lambda state: state.audio.playback_volume)
+    def set_playback_volume(volume: float) -> None:
+        audio_manager.set_playback_volume(volume)
+    autoruns.append(set_playback_volume)
+
+    @store.autorun(lambda state: state.audio.capture_volume)
+    def set_capture_volume(volume: float) -> None:
+        audio_manager.set_capture_volume(volume)
+    autoruns.append(set_capture_volume)
+
+    # autoruns list keeps references alive
+    _ = autoruns
+    return []
+```
+
+### Autoruns vs event subscriptions
+
+| Pattern | Use when |
+|---------|----------|
+| `@store.autorun(selector)` | React to **state changes** with computed/derived values |
+| `store.subscribe_event(EventType, handler)` | React to **one-off events** (sounds, notifications, external triggers) |
+
+**Rule of thumb**: if it's in state, use autorun. If it's ephemeral, use events.
+
+### Best practices
+
+- **Keep selectors cheap**: selectors run on every state update; avoid heavy computation
+- **Minimize selected scope**: select only what you need, not entire slices when possible
+- **Autoruns should be idempotent**: may re-run if store re-dispatches
+- **Don't dispatch from selectors**: selectors must be pure; dispatch only from the callback body
+- **Use `memoization=False` sparingly**: only when selector depends on external state
+
+---
+
 ## Common patterns
 
 ### “Request / Success / Failure” triad
