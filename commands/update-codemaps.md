@@ -14,4 +14,3 @@ Analyze the codebase structure and update architecture documentation:
 5. Add freshness timestamp to each codemap
 6. Save reports to .reports/codemap-diff.txt
 
-Use TypeScript/Node.js for analysis. Focus on high-level structure, not implementation details.

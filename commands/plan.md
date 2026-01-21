@@ -16,11 +16,13 @@ This command invokes the **planner** agent to create a comprehensive implementat
 ## When to Use
 
 Use `/plan` when:
-- Starting a new feature
+- Starting a new service
 - Making significant architectural changes
 - Working on complex refactoring
 - Multiple files/components will be affected
 - Requirements are unclear or ambiguous
+- Adding new Redux actions/events
+- Modifying hardware abstraction layers
 
 ## How It Works
 
@@ -36,57 +38,65 @@ The planner agent will:
 ## Example Usage
 
 ```
-User: /plan I need to add real-time notifications when markets resolve
+User: /plan I need to add a new service that handles Bluetooth connectivity
 
 Agent (planner):
-# Implementation Plan: Real-Time Market Resolution Notifications
+# Implementation Plan: Bluetooth Service
 
 ## Requirements Restatement
-- Send notifications to users when markets they're watching resolve
-- Support multiple notification channels (in-app, email, webhook)
-- Ensure notifications are delivered reliably
-- Include market outcome and user's position result
+- Add a new service to manage Bluetooth connectivity on Raspberry Pi
+- Support device discovery, pairing, and connection management
+- Expose state through Redux store for UI consumption
+- Provide actions for scanning, pairing, and disconnecting devices
 
 ## Implementation Phases
 
-### Phase 1: Database Schema
-- Add notifications table with columns: id, user_id, market_id, type, status, created_at
-- Add user_notification_preferences table for channel preferences
-- Create indexes on user_id and market_id for performance
+### Phase 1: State and Actions
+- Define BluetoothState in `ubo_app/store/services/bluetooth.py`
+- Create actions: BluetoothScanAction, BluetoothPairAction, BluetoothDisconnectAction
+- Create events: BluetoothDeviceDiscoveredEvent, BluetoothConnectionStatusEvent
+- Run `uv run poe proto` to regenerate proto files
 
-### Phase 2: Notification Service
-- Create notification service in lib/notifications.ts
-- Implement notification queue using BullMQ/Redis
-- Add retry logic for failed deliveries
-- Create notification templates
+### Phase 2: Reducer Implementation
+- Create `ubo_app/services/030-bluetooth/reducer.py`
+- Handle state transitions for scanning, pairing, connected states
+- Maintain device list in immutable state tree
+- Register reducer with combine_reducers in store setup
 
-### Phase 3: Integration Points
-- Hook into market resolution logic (when status changes to "resolved")
-- Query all users with positions in market
-- Enqueue notifications for each user
+### Phase 3: Service Implementation
+- Create `ubo_app/services/030-bluetooth/setup.py`
+- Use `create_task` from `ubo_app.utils.async_` for background scanning
+- Implement D-Bus integration via `sdbus` for BlueZ
+- Add hardware abstraction for non-RPi development (mock Bluetooth)
 
-### Phase 4: Frontend Components
-- Create NotificationBell component in header
-- Add NotificationList modal
-- Implement real-time updates via Supabase subscriptions
-- Add notification preferences page
+### Phase 4: UI Integration
+- Create menu items in `ubo_app/services/030-bluetooth/ubo_handle.py`
+- Add Bluetooth settings page with device list
+- Implement scan button and pairing flow
+- Use notification IDs with `bluetooth:` prefix
+
+### Phase 5: Testing
+- Add unit tests in `tests/store/test_bluetooth.py`
+- Create integration tests in `tests/integration/`
+- Test on both RPi and desktop (with mocks)
 
 ## Dependencies
-- Redis (for queue)
-- Email service (SendGrid/Resend)
-- Supabase real-time subscriptions
+- `sdbus` for D-Bus communication with BlueZ
+- BlueZ daemon running on Raspberry Pi
+- Mock implementation for desktop development
 
 ## Risks
-- HIGH: Email deliverability (SPF/DKIM required)
-- MEDIUM: Performance with 1000+ users per market
-- MEDIUM: Notification spam if markets resolve frequently
-- LOW: Real-time subscription overhead
+- HIGH: BlueZ D-Bus API complexity and async handling
+- MEDIUM: Thread safety when communicating with main store
+- MEDIUM: Hardware variations between RPi 4 and RPi 5
+- LOW: Service priority conflicts (030-xxx namespace)
 
-## Estimated Complexity: MEDIUM
-- Backend: 4-6 hours
-- Frontend: 3-4 hours
-- Testing: 2-3 hours
-- Total: 9-13 hours
+## Estimated Complexity: MEDIUM-HIGH
+- State/Actions: Phase 1
+- Reducer: Phase 2
+- Service: Phase 3 (largest effort)
+- UI: Phase 4
+- Testing: Phase 5
 
 **WAITING FOR CONFIRMATION**: Proceed with this plan? (yes/no/modify)
 ```
@@ -99,6 +109,17 @@ If you want changes, respond with:
 - "modify: [your changes]"
 - "different approach: [alternative]"
 - "skip phase 2 and do phase 3 first"
+
+## Ubo App Specific Considerations
+
+When planning for ubo_app, always consider:
+
+1. **Service Priority** - Use correct prefix (000-0xx for hardware, 030-0xx for networking, etc.)
+2. **Redux Flow** - Actions → Reducer → State → UI (never direct method calls)
+3. **Async Patterns** - Use `create_task` from `ubo_app.utils.async_` for background work
+4. **Hardware Abstraction** - Plan mock implementations for desktop development
+5. **Protobuf Workflow** - Run `uv run poe proto` when actions/events change
+6. **Thread Isolation** - Services run in isolated threads with dedicated event loops
 
 ## Integration with Other Commands
 

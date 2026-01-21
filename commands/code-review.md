@@ -8,8 +8,6 @@ Comprehensive security and quality review of uncommitted changes:
 
 **Security Issues (CRITICAL):**
 - Hardcoded credentials, API keys, tokens
-- SQL injection vulnerabilities
-- XSS vulnerabilities  
 - Missing input validation
 - Insecure dependencies
 - Path traversal risks
@@ -19,9 +17,8 @@ Comprehensive security and quality review of uncommitted changes:
 - Files > 800 lines
 - Nesting depth > 4 levels
 - Missing error handling
-- console.log statements
+- print statements
 - TODO/FIXME comments
-- Missing JSDoc for public APIs
 
 **Best Practices (MEDIUM):**
 - Mutation patterns (use immutable instead)
