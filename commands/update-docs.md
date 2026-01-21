@@ -55,8 +55,8 @@ Extract from `tests/.env` and codebase:
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `UBO_LOG_LEVEL` | Logging verbosity | `DEBUG` |
-| `UBO_CACHE_PATH` | Cache directory path | `/tmp/ubu-test-cache` |
-| `UBO_DATA_PATH` | Data directory path | `/tmp/ubu-test-data` |
+| `UBO_CACHE_PATH` | Cache directory path | `/tmp/ubo-test-cache` |
+| `UBO_DATA_PATH` | Data directory path | `/tmp/ubo-test-data` |
 | `UBO_DEBUG_VISUAL` | Enable visual debugging | `False` |
 | `UBO_DEBUG_TASKS` | Debug async tasks | `False` |
 | `UBO_DEBUG_DOCKER` | Debug Docker operations | `False` |
