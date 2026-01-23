@@ -1,0 +1,14 @@
+{
+    "mcpServers": {
+        "github": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "description": "GitHub operations - PRs, issues, repos"
+        },
+        "docker": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-docker"],
+            "description": "Docker operations - containers, images, networks"
+        }
+    }
+}
